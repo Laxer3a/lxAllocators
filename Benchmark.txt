@@ -1,0 +1,47 @@
+Preliminary Benchmark:
+	5000 malloc per loop, in task system.
+	Tested on a Bloomfield i7 920 @ 2700 Mhz FIXED, 4 Cores available, no Hyperthreading activated.
+	
+Stack Allocator : Allocation in million per seconds.
+=====================================================
+
+			MT Enable			ST Only
+	1 Core	73.9M/Sec			144.4M/Sec
+	4 Cores	21.4M/Sec (Shared)	575.5M/Sec (/Thread)
+			292 M/Sec (/Thread)
+			
+Average Cycle count per alloc per core.
+=====================================================
+	
+			MT Enable			ST Only
+	1 Core	 36 Cycles			18.6 Cycles
+	4 Cores	504 Cycles (Shared)	18.7 Cycles
+			 36 Cycles (/Thread)
+	
+	Single thread optimized could is roughly twice faster than MT lockless lock even without sharing data and object across core.
+	
+	Performance degredation during usage in multicore usage with share allocator is that allocator pointer are on the same cache line.
+	But it is not something that can be optimized by allocating a specific cache line per thread as we need to access atomic values.
+
+	
+Standard malloc/free : Allocation in million per seconds.
+	malloc & free support multithreading.
+=====================================================
+			MT Enable			ST Only
+	1 Core	1.2  M/Sec			N/A (Same)
+	4 Cores	0.95 M/Sec (Shared)	N/A (Same)
+			0.95 M/Sec (/Thread)
+
+Average Cycle count per alloc per core.
+=====================================================
+	
+			MT Enable			ST Only
+	1 Core	 2250 Cycles			N/A
+	4 Cores	 2840 Cycles (Shared)	N/A
+			 2840 Cycles (/Thread)
+
+	Well, one can conclude why we should NOT rely on a system allocator except allocation big chunks for smaller allocators.
+	May the benchmark by allocating pieces of aligned memory of 128 byte for 20 byte block isnt the best thing we can do.
+	Seems there is a few % gain when using non aligned version of the function. (1.3 millions but could my measurement)
+
+

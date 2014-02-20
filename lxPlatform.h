@@ -4,25 +4,29 @@
 #if defined(_WIN32) || defined(_WIN64) || defined(OS_WINDOWS)
 	#if defined(_MSC_VER)		// Visual Studio
 		#include <intrin.h>
+		#define USE_WINDOWS_API
 	#endif
 #endif
 
 namespace lx {
 
-	#if defined(i386) || defined(_M_IX86) || defined(_M_X64)
-		#if defined(_MSC_VER)		// Visual Studio
-			#if defined(_M_X64)
+	//
+	// Atomic Operations.
+	//
+	#if defined(USE_WINDOWS_API)
+		#if defined(_WIN64)
 			// 64 bit ptr
-			#define ATOMICINCREMENT(a,b)	_InterlockedExchangeAdd64((volatile __int64*)a,b);
-			#else
+			#define ATOMICINCREMENT32(a,b)	_InterlockedExchangeAdd((volatile long*)a,b);
+			#define ATOMICINCREMENTPTR(a,b)	_InterlockedExchangeAdd64((volatile __int64*)a,b);
+		#else
 			// 32 bit ptr
-			#define ATOMICINCREMENT(a,b)	_InterlockedExchangeAdd((volatile long*)a,b);
-			#endif
-		#elif defined(__GNUC__)		// Clang, LLVM, GNU C++, Intel ICC, ICPC
-			// GCC
-			// __sync_fetch_and_add (type *ptr, type value, ...)
-			// __sync_add_and_fetch (type *ptr, type value, ...)
+			#define ATOMICINCREMENT32(a,b)	_InterlockedExchangeAdd((volatile long*)a,b);
+			#define ATOMICINCREMENTPTR(a,b)	_InterlockedExchangeAdd((volatile long*)a,b);
 		#endif
+	#elif defined(__GNUC__)		// Clang, LLVM, GNU C++, Intel ICC, ICPC
+		//
+		// TODO Increment Atomic 64 and 32 bit with GNU C
+		//
 	#endif
 }
 

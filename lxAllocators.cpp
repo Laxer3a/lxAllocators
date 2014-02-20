@@ -13,6 +13,9 @@ using namespace lx;
 // =================================================
 
 void* StackAllocator::allocateStack	(u32 size, u32 alignment) {
+	// Contract<Size of ZERO allowed>
+	lxAssert(alignment != 0, "Alignment MUST NOT BE ZERO");
+
 	// 1. Find non align part
 	// 2. Compute the distance to the next aligned part.
 	// 3. If already aligned, no offset
@@ -20,7 +23,7 @@ void* StackAllocator::allocateStack	(u32 size, u32 alignment) {
 	u32 alignmentMiss = ((u32)m_currPtr) & (alignment - 1);
 	// Branchless alignment adjustement.
 	// Shift 0 or 32 bit -> Same as multiply by 1 or 0 -> Same as if (cond) { a } else { 0 }
-	alignmentMiss = (alignment - alignmentMiss) << ((alignmentMiss == 0)<<5); 
+	alignmentMiss = (alignment - alignmentMiss) >> ((alignmentMiss == 0)<<5); 
 
 	// 1. Add alignement offset
 	size += alignmentMiss;
@@ -35,6 +38,9 @@ void* StackAllocator::allocateStack	(u32 size, u32 alignment) {
 }
 
 void* StackAllocator::allocateStackMT(u32 size, u32 alignment) {
+	// Contract<Size of ZERO allowed>
+	// Contract<Alignment of ZERO allowed>
+
 	// Different technique here because current pointer 
 	// can not be trusted outside of atomic.
 	// Force to allocate more
@@ -43,10 +49,10 @@ void* StackAllocator::allocateStackMT(u32 size, u32 alignment) {
 	// Size increment is zero if already reach limit
 	// Allow branchless code + do not increase atomic counter anymore.
 	// Do not care about counter accuracy here, just in or out.
-	size <<= ((m_currPtrAtomic >= m_endPtr)<<5); // Shift by 0 or 32 
+	size >>= ((m_currPtrAtomic >= m_endPtr)<<5); // Shift by 0 or 32 
 
 	// Perform increment FIRST.
-	u8* before = (u8*)ATOMICINCREMENT(&m_currPtrAtomic,size);
+	u8* before = (u8*)ATOMICINCREMENTPTR(&m_currPtrAtomic,size);
 
 	u32 alignmentMiss = ((u32)before) & (alignment - 1);
 	alignmentMiss = (alignment - alignmentMiss); // We already over allocated anyway, avoid multiply to restrict.
@@ -100,32 +106,43 @@ PoolAllocator::PoolAllocator(void* baseMemory, u32 elementSize, u32 elementCount
 		alignment = DEFAULT_ALIGN;
 	}
 
-	u32 size = (elementSize + (alignment-1) / alignment) * alignment;
+	//
+	// Our pool use the fact that start == end pointer to find that it is full.
+	// Thus, an empty pool can not use start and end at same position.
+	// So we put "free" at the end and create a gap of 1 item.
+	// This simplifies a lot the code for alloc.
+	// But in exchange we loose ONE slot, so internally we add one more slot
+	// to make sure that the user has the number of slot that was requested
+	// and not elementCount-1 slots.
+	//
+	elementCount++;
+
+	u32 size = ((elementSize + (alignment-1)) / alignment) * alignment;
 
 	u8* bufferItem	= (u8*)baseMemory;
 	
-	void** elementPtr	= (void**)&bufferItem[size * elementCount];
+	void** elementPtr	= (void**)&bufferItem[size * ((u64)elementCount)];
 
 	for (u32 n = 0; n < elementCount; n++) {
-		elementPtr[n] = &bufferItem[size * n];
+		elementPtr[n] = &bufferItem[size * ((u64)n)];
 	}
 
 	m_internalStatus.m_features		= 0;
-	m_internalStatus.m_totalMemory	= elementSize * elementCount;
+	m_internalStatus.m_totalMemory	= ((u64)size) * elementCount;
 
 	if (enableMT) {
 		CREATELOCK(&m_lock);
-		info.mt.m_elementPtr = elementPtr;
+		info.mt.m_elementPtr	= elementPtr;
 		info.mt.m_flagAlloc		= false;
 		info.mt.m_flagFree		= false;
 		info.mt.m_allocMT		= 0;
-		info.mt.m_freeMT		= size-1;
-		if (IsPower2(elementSize)) {
-			info.mt.m_size	= size - 1;
+		info.mt.m_freeMT		= elementCount-1;
+		if (IsPower2(elementCount)) {
+			info.mt.m_size	= elementCount - 1;
 			m_allocateFunc	= (IAllocator::__allocate)	&PoolAllocator::allocatePoolMTPOW2;
 			m_freeFunc		= (IAllocator::__free)		&PoolAllocator::freePoolMTPOW2;
 		} else {
-			info.mt.m_size	= size;
+			info.mt.m_size	= elementCount;
 			m_allocateFunc	= (IAllocator::__allocate)	&PoolAllocator::allocatePoolMT;
 			m_freeFunc		= (IAllocator::__free)		&PoolAllocator::freePoolMT;
 		}
@@ -147,11 +164,15 @@ PoolAllocator::~PoolAllocator() {
 
 
 /*static*/
-u32 PoolAllocator::getMemoryAmount(u32 elementSize, u32 elementCount, u32 alignment) {
-	if (alignment < 8) {
-		alignment = 8; // Do not want any problem when storing the pointers.
+u64 PoolAllocator::getMemoryAmount(u32 elementSize, u32 elementCount, u32 alignment) {
+	if (alignment < sizeof(void*)) {
+		alignment = sizeof(void*); // Do not want any problem when storing the pointers.
 	}
-	u32 size = (elementSize + (alignment-1) / alignment) * alignment;
+
+	// See Pool allocator constructor comment about same logic.
+	elementCount++;
+
+	u64 size = ((u64)((elementSize + (alignment-1)) / alignment)) * alignment;
 	return (elementCount * size) + (sizeof(void*) * elementCount);
 }
 
@@ -190,9 +211,9 @@ void* PoolAllocator::allocatePoolMT	(u32 /*size*/, u32 /*alignment*/) {
 	u32 alloc;
 	u32 diff = info.mt.m_freeMT - info.mt.m_allocMT;
 	// if more than 16 core at the SAME time trying to allocate or free !? --> FAIL !
-	void* res = NULL;
+	void* res;
 	if (diff > 16) {
-		alloc = ATOMICINCREMENT(&info.mt.m_allocMT, 1);
+		alloc = ATOMICINCREMENT32(&info.mt.m_allocMT, 1);
 		res = info.mt.m_elementPtr[alloc % info.mt.m_size];
 	} else {
 		LOCK(&m_lock);
@@ -225,7 +246,7 @@ void  PoolAllocator::freePoolMT		(void* ptr) {
 	// if more than 16 core at the SAME time trying to allocate or free !? --> FAIL !
 	void* res = NULL;
 	if (diff > 16) {
-		free = ATOMICINCREMENT(&info.mt.m_freeMT, 1);
+		free = ATOMICINCREMENT32(&info.mt.m_freeMT, 1);
 		info.mt.m_elementPtr[free % info.mt.m_size] = ptr;
 	} else {
 		LOCK(&m_lock);
@@ -245,9 +266,9 @@ void* PoolAllocator::allocatePoolMTPOW2	(u32 /*size*/, u32 /*alignment*/) {
 	u32 alloc;
 	u32 diff = info.mt.m_freeMT - info.mt.m_allocMT;
 	// if more than 16 core at the SAME time trying to allocate or free !? --> FAIL !
-	void* res = NULL;
+	void* res;
 	if (diff > 16) {
-		alloc = ATOMICINCREMENT(&info.mt.m_allocMT, 1);
+		alloc = ATOMICINCREMENT32(&info.mt.m_allocMT, 1);
 		res = info.mt.m_elementPtr[alloc & info.mt.m_size];
 	} else {
 		LOCK(&m_lock);
@@ -271,7 +292,7 @@ void  PoolAllocator::freePoolMTPOW2(void* ptr) {
 	// if more than 16 core at the SAME time trying to allocate or free !? --> FAIL !
 	void* res = NULL;
 	if (diff > 16) {
-		free = ATOMICINCREMENT(&info.mt.m_freeMT, 1);
+		free = ATOMICINCREMENT32(&info.mt.m_freeMT, 1);
 		info.mt.m_elementPtr[free & info.mt.m_size] = ptr;
 	} else {
 		LOCK(&m_lock);

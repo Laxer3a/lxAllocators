@@ -41,17 +41,7 @@
 	- Use virtual function for the ease of implementation when the function are not frequently called. (status, changing state)
 	Basically allocation & free only are relying on function pointer mecanism.
 
-	- Size of buffers are limited to 32 bit, the goal here is realtime and high performance which
-	most of the time have nothing to do with ONE buffer of more than 4 GB.
-
-	Limitation :
-	======================
-	
-	- Allocator internally are limited to 4GB of working space per allocator.
-
-	- Switch to multithreading on/off on allocators should be done just after construction, never at runtime.
-	  By default all allocator are multithreaded disabled, except the standard allocator which relies
-	  on standard malloc/free and thus is supporting multithreading anyway.
+	- Allocator support 64 bit source buffer, but allocation is limited to 32 bit size items.
 */
 
 #include "lxTypes.h"
@@ -128,7 +118,8 @@ protected:
 
 
 /**	A very simple allocator that uses malloc and free. 
-	As malloc and free support multithreading by default, this allocator does always. */
+	As malloc and free support multithreading by default, this allocator does always.
+	Of course fully 64 bit, no limitation except OS. */
 class StandardAllocator : public IAllocator {
 public:
 	StandardAllocator::StandardAllocator() {
@@ -148,19 +139,22 @@ private:
 /**	A very simple allocator that NEVER disallocate
 	and just pile up allocation until full.
 	Very efficient for local temporary work. 
-	Note that allocation overhead in multithreading when performing alignement.
-	(real size = size + alignment) */
+	Note that allocation overhead in multithreading when performing alignement is higher.
+	(allocated size = size + alignment)
+	If ALL your allocations are using same standard alignment (ex. pointer size) then pass 0
+	as alignement IN MULTITHREADING MODE ONLY.
+	Support full 64 bit memory space. */
 class StackAllocator : public IAllocator {
 public:
-	StackAllocator(void* baseMemory, u32 size, bool enableMT = false)
-	:m_basePtr((unsigned char*)baseMemory)
+	StackAllocator(void* baseMemoryStartIncluded, void* baseMemoryEndExcluded, bool enableMT = false)
+	:m_basePtr((unsigned char*)baseMemoryStartIncluded)
 	{
 		m_currPtr		= m_basePtr;
 		m_currPtrAtomic	= m_currPtr;
-		m_endPtr  = &m_currPtr[size];
+		m_endPtr		= (unsigned char*)baseMemoryEndExcluded;
 
 		m_internalStatus.m_features				= 0;
-		m_internalStatus.m_totalMemory			= size;
+		m_internalStatus.m_totalMemory			= m_endPtr - m_basePtr;
 
 		m_freeFunc     = (IAllocator::__free    )&StackAllocator::freeStack;
 		enableMultithreadSupport(enableMT);
@@ -223,7 +217,8 @@ private:
 	please use a 2^n size for the pool item count. Allocation IS faster.
 
 	WARNING : Size and alignment are ignored when calling alloc(), always return a fixed size block.
-	NOTE    : Overhead is one pointer per element.
+	NOTE    : Overhead is one pointer per element.(seperate memory space)
+	Support 64 bit base buffer.
  */
 class PoolAllocator : public IAllocator {
 public:
@@ -231,7 +226,7 @@ public:
 	~PoolAllocator();
 	virtual const Status* getStatus();
 
-	static u32 getMemoryAmount(u32 elementSize, u32 elementCount, u32 alignment);
+	static u64 getMemoryAmount(u32 elementSize, u32 elementCount, u32 alignment);
 private:
 	struct ST {
 		// Single thread

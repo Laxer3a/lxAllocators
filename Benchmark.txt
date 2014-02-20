@@ -44,4 +44,37 @@ Average Cycle count per alloc per core.
 	May the benchmark by allocating pieces of aligned memory of 128 byte for 20 byte block isnt the best thing we can do.
 	Seems there is a few % gain when using non aligned version of the function. (1.3 millions but could my measurement)
 
+Pool Allocator : ALLOCATION + FREE in million per seconds.
+=====================================================
+
+			MT Enable			ST Only
+	1 Core	---------			 90M/Sec			 30 Cycles per alloc + free.
+	4 Cores	--------- (Shared)	340M/Sec (/Thread)	 31 Cycles per alloc + free per core.
+			--------- (/Thread)
+
+	MT Enable with ((power of 2-)1) item count
+	1 Core	 35.5 M/Sec				 76 Cycles per alloc + free
+	4 Cores	 11.7 M/Sec(Shared)		230 Cycles per alloc + free
+			138.5 M/Sec(/Thread)	 78 Cycles per alloc + free per core.
+
+	MT Enable with any generic size
+	1 Core	 22.3 M/Sec				122 Cycles per alloc + free
+	4 Cores	  9.6 M/Sec(Shared)		282 Cycles per alloc + free
+			 74.0 M/Sec(/Thread)	145 Cycles per alloc + free per core.
+			 
+	It is obvious that specific optimized part in a single thread provide at least twice the performance of the optimized
+	equivalent supporting multithreading.
+	But, as scalability does not improve but rather degrade when sharing the allocator, it would be
+	recommended if possible to use a pool for each allocator.
+	
+	Note that of course the benchmark is putting a lot of pressure on the allocator, mostly accessing the same cache line
+	all the time doing nothing else, so this is an extreme worst case.
+	Still, even in this case, we are 10x more efficient than a standard malloc.
+	
+	It is important to notice that using a specific size of item count gives you a 30% improvement in performance,
+	as some logic is not necessary anymore.
+	
+	Pool allocator, unlike stack allocator has the ability to recycle and free elements, so working a few pools
+	based on different size slot can really give a edge in term of performance.
+	At 30 cycles including the cost of disallocation, it gets close in term of competitivity to the stack allocator.
 
